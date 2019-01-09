@@ -1,0 +1,409 @@
+// Symmetry in Chaos 2018 - Emergence / Slime Mold Physics
+
+//---User Input---
+// 'o' to toggle old version physics (without acc)
+// 'v' to toggle noise
+// 'c' to toggle color (only with fade mode)
+// 'd' to toggle drawing slime lines
+// 'space' to adjust center force strength with mouseX
+// 'n' to adjust noise scale with mouseX
+// 'm' to adjust slime attraction distance limit with mouseX
+// 'a' to adjust seperation strength with mouseX 
+// 'l' to adjust line connection distance limit with mouseX (with mode=1 & mode=2)
+// ',' to adjust number of particle connections with mouseX 
+// 'r' to randomize seperation ('a' to re-adjust it)
+// 'p' to start/stop removing particles
+// 's' to start/stop adding particles
+// 'f' to toggle saving frames
+// '1', '2', '3', '4' to choose a render mode
+// press mouse to add force
+//-----------
+
+ArrayList<Particle> particles;
+
+PVector cntr;
+PVector startPosA;
+PVector startPosB;
+
+boolean valid;
+boolean delParticles = false;
+boolean addParticles = false;
+boolean save = false;
+boolean noise = false;
+boolean Hue = false;
+boolean old = false;
+boolean timelapse = false;
+boolean drawSlime = true;
+
+float time = 0;  // used for noise in Particle.target()
+
+int mode = 1;    // mode iterator
+int count = 0;   // particle indexes
+
+void setup(){
+  size(720,720,P3D);
+  //fullScreen(P3D);
+  
+  colorMode(HSB);
+  background(35);
+  noFill();
+  stroke(250);
+  rectMode(CENTER);
+  smooth(8);
+  
+  cntr = new PVector(width/2,height/2);
+  particles = new ArrayList<Particle>();
+  
+  for(int i = 0; i < 500; i++){
+    float x = random(1000);
+    float r = 20;
+    float d = 20;
+    startPosA = new PVector(sin(x)*(r+random(-d,d)),cos(x)*(r+random(-d,d)));
+    startPosA.add(cntr);
+    particles.add(new Particle(startPosA,count));
+    count++;
+  }
+}
+
+void draw(){
+  if(mode==0 || (mode==2 && !timelapse)) fade();
+  else if(mode==1) background(35);
+
+  if(mode!=2 || (mode==2 && !timelapse)) runParticles();
+  else{
+    background(35);
+    for(int i = 0; i < 100; i++){
+      runParticles();
+    }
+  }
+  
+  //if(mode!=3 && mode!=2) time+=.015;
+    
+  if(frameCount%10==0) println("parts: " + particles.size(),", frmC: " + frameCount,", add: " + addParticles,", frmR: " + frameRate);
+  if(save){
+    saveFrame("new/####.png");
+    println("saved");
+  }
+  //println(frameRate);
+}
+
+// main loop controling particle system - particle addition / checks / update 
+void runParticles(){
+  // new particle addition
+  for(int i = 0; i < 3; i++){
+    if(addParticles){
+      float x = random(1000);
+      float r = 20;
+      float d = 20;
+      startPosA = new PVector(sin(x)*(r+random(-d,d)),cos(x)*(r+random(-d,d)));
+      startPosA.add(cntr);
+      particles.add(new Particle(startPosA,count));
+      count++;
+    }
+  }
+  
+  if(delParticles) removeP(); // remove particles
+  
+  // update and display
+  for(Particle c : particles){
+    c.update();
+    //c.calcNeighbours();
+  }
+  if(drawSlime){
+    for(Particle c : particles){
+      c.display();
+    }
+  }
+}
+  
+// most of the key inputs
+void keyPressed(){
+  if(key == 'σ') addParticles = !addParticles;
+  else if(key == 'φ') save = !save;
+  else if(key == 'π') delParticles=!delParticles;
+  else if(key == 'ω') noise=!noise;
+  else if(key == 'τ') timelapse=!timelapse;
+  else if(key == 'ο') old=!old;
+  else if(key == 'ψ') Hue=!Hue;
+  else if(key == 'δ') drawSlime=!drawSlime;
+  else if(key == '1'){
+    mode = 0;
+    background(35);
+  }
+  else if(key == '2'){
+    mode = 1;
+    background(35);
+  }
+  else if(key == '3'){
+    mode = 2;
+    background(35);
+  }
+  else if(key == '4'){
+    mode = 3;
+    background(35);
+  }
+}
+
+// fade function for mode 0
+void fade(){
+  noStroke();
+  fill(25, 255.0/15.0); // background depends on colorMode
+  rect(width/2, height/2, width, height);
+}
+
+// removes 4 particles on each iteration
+void removeP(){
+  for(int i=0; i<4; i++){
+    if(particles.size() > 0){
+      Particle c = particles.get(particles.size()-1);
+      particles.remove(c);
+      count--;
+    }
+    else delParticles = false;
+  }
+}
+
+
+class Particle{
+  ArrayList<Particle> neighbours;
+  
+  PVector pos = new PVector();
+  PVector acc = new PVector();
+  PVector speed = new PVector();
+  PVector sep = new PVector();
+  PVector desired;
+  PVector mouse;
+  
+  float dist;
+  float alpha,clr;                
+  float rectSize;
+  float noiseVar;
+  float forceStrength = 0; // center force strength
+  float radius=1;          // particle's radius
+  float r;                 // random float(0=>1) for interaction & seperation difference
+  float cD,tarMag;         // target funtion variables
+  float nScl = .005;       // noise scale
+  float nSize = 75;        // noise strength
+  float intMag;            // interaction vector mag
+  float sepMag;            // seperation vector mag
+  float conLim = 0;        // distance limit for drawing connections
+  float sepLim;            // distance limit for seperation
+  float slimeLim;          // distance limit for slime neighbours to attract
+  float nearLim;           // distance limit for particle density (used in drawing)
+  
+  int id;
+  int nearCount;
+
+  boolean connect = true; // if false particle doesn't draw connections
+  boolean drewLines = false;
+  
+  // constructor(position, pair index, index)
+  Particle(PVector p, int i){
+    pos = p;
+    sepLim = 40;
+    slimeLim = 2;
+    nearLim = 30;
+    id = i;
+    r = random(1);
+    
+    neighbours = new ArrayList<Particle>();
+  }
+  
+  // main update function
+  void update(){
+    if(keyPressed){
+      if(key == 'ν') nScl = map(mouseX,0,width,0,.01);
+      if(key == 'λ') conLim = map(mouseX,0,width,0,100);
+      if(key == 'μ') slimeLim = map(mouseX,0,width,2,20);
+      if(key == ' ') forceStrength = map(mouseX,0,width,0,100);
+      if(key == 'ρ') sepLim = randSep(); // randomize seperation value
+      if(key == 'α') sepLim = map(mouseX,0,width,20,150); // set seperation value
+    }
+    
+    drewLines = false;
+    nearCount = 0;
+    
+    // all the slime mold magic is right here
+    calcNeighbours();
+    
+    // main loop to check every other particle (interaction,seperation,connections..)
+    for(Particle other : particles){
+      dist = PVector.dist(pos,other.pos);
+            
+      seperation(other);
+      
+      // connection drawing
+      if(conLim > dist && dist>0){  
+        if(mode!=0){
+          if(mode==2){
+            alpha = map(dist,.1,conLim,30,5);
+            stroke(255,alpha); 
+          }
+          else if(mode==3){
+            alpha = map(dist,.1,conLim,15,1);
+            stroke(250,alpha); 
+          }
+          else{
+            alpha = map(dist,.1,conLim,150,20);
+            stroke(245,alpha); 
+          }
+          strokeWeight(1.2); 
+          if(connect) line(pos.x,pos.y,other.pos.x,other.pos.y); 
+        }
+      }
+    }
+    
+    // interact with a target
+    mouse = new PVector(mouseX,mouseY);
+    target(cntr, 0, forceStrength, 450);
+    if(mousePressed) target(mouse, -10, 0, 200);
+        
+    // update acc/speed/pos
+    if(!old){
+      acc.mult(.3);   // adjusts overall speed
+      speed.add(acc); // add acc to speed
+      clr = map(speed.heading(),-PI,PI,0,255);  // used in color mode
+      speed.limit(5); // limit speed
+      pos.add(speed); // with acceleration
+    }
+    else{
+      //acc.mult(2);    // adjusts overall speed
+      clr = map(acc.heading(),-PI,PI,0,255);  // used in color mode
+      acc.limit(3);   // limit speed
+      pos.add(acc);   // without acc
+    }
+        
+    acc.mult(0);
+    
+    if(!old) speed.mult(.9);   // rate of deceleration (eg friction)
+    else speed.mult(0);         // 1.7 Version
+    
+    //if(id == 0) target(new PVector(10,10), 0, 20, 450);
+    //else if(id == 1) target(new PVector(10,height-10), 0, 20, 450);
+    //else if(id == 2) target(new PVector(width-10,10), 0, 20, 450);
+    //else if(id == 3) target(new PVector(width-10,height-10), 0, 20, 450);
+    //if(id == 1) pos.set(20,height/2);
+    bounds();
+  }
+  
+  // neighbours list is recalculated on each iteration
+  void calcNeighbours(){
+    neighbours = new ArrayList<Particle>();
+    
+    // connect two points whenever there does not exist a third point that is closer to both p and q than they are to each other
+    for(Particle other : particles){
+      if(other != this){
+        float dist = distSq(pos,other.pos);   
+        if(dist < sq(30)) nearCount++;  // used for drawing
+        boolean nearest = true;
+        
+        for(Particle p : particles){
+          if(p != this && p != other){
+            float dist2 = distSq(pos,p.pos);
+            float dist3 = distSq(other.pos,p.pos);
+            if(dist > dist2 && dist > dist3){
+              nearest = false;
+              break;
+            }
+          }
+        }
+        if(nearest){
+          neighbours.add(other);
+        }
+      }
+    }
+  }
+  
+  // separation function
+  void seperation(Particle other){
+    if(dist > 0){
+      if(!neighbours.contains(other)){
+        if(dist < sepLim){
+          sep = PVector.sub(other.pos,pos);
+          sepMag = map(dist,0,sepLim,1,0);
+          sep.setMag(sepMag);
+            
+          acc.sub(sep);
+        }
+      }else{
+        float max = 0;
+        if(!old) max = .5;
+        else max = 1;
+        if(dist < slimeLim){
+          sep = PVector.sub(other.pos,pos);
+          sepMag = map(dist,0,slimeLim,max,0);
+          sep.setMag(sepMag);
+            
+          acc.sub(sep);
+        }else{
+          sep = PVector.sub(other.pos,pos);
+          sepMag = map(dist,slimeLim,slimeLim*2,0,-max);
+          sep.setMag(sepMag);
+            
+          acc.sub(sep);
+        }
+      }
+    }
+  }
+  
+  // forces interaction function
+  void target(PVector tar,float f,float F,float d){
+    desired = PVector.sub(tar,pos);
+    cD = dist(tar.x,tar.y,pos.x,pos.y);
+    if(noise && tar != mouse){
+      noiseVar = map(noise(pos.x*nScl,pos.y*nScl,time),0,1,0,nSize);
+      tarMag = map(cD,0,d,f,F+noiseVar);
+    }
+    else tarMag = map(cD,0,d,f,F);
+    if(tar == mouse && tarMag > 0) tarMag = 0;
+    
+    desired.setMag(tarMag);    
+    acc.add(desired);
+  }
+  
+  void bounds(){
+    pos.x = constrain(pos.x,radius,width-radius);
+    pos.y = constrain(pos.y,radius,height-radius);
+  }
+  
+  // seperation randomizing
+  float randSep(){
+    float r = random(0,1);
+    if(r<1) sepLim = 250;
+    if(r<.5) sepLim = 150;
+    if(r<.25) sepLim = 70;
+    return sepLim;
+  }
+  
+  // returns square of the distance between a and b
+  float distSq(PVector a, PVector b) {
+    float dx = b.x - a.x;
+    float dy = b.y - a.y;
+    return abs(dx * dx + dy * dy);
+  }
+
+  // diplay particles function
+  void display(){
+    for(Particle other : neighbours){
+      if(!other.drewLines && other != this){
+        stroke(245);
+        float s = map(nearCount,0,10,5,0);
+        if(s<1) s = 1;
+        strokeWeight(s);
+        line(pos.x,pos.y,other.pos.x,other.pos.y); 
+      }
+    }
+    drewLines = true;
+    stroke(250);
+    //if(mode==0){
+    //  if(Hue) stroke(clr,175,245);
+    //  strokeWeight(radius*3); 
+    //  point(pos.x,pos.y);
+    //}
+    //if(mode==1){
+    //  strokeWeight(3);
+    //  rectSize = radius*.15;
+    //  rect(pos.x,pos.y,rectSize,rectSize);
+    //}
+  }
+}
